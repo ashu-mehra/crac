@@ -26,6 +26,9 @@
 
 package jdk.crac;
 
+import java.util.Optional;
+import java.util.Arrays;
+
 /**
  * A {@code Resource} that allows other {@code Resource}s to be registered with it.
  *
@@ -34,6 +37,7 @@ package jdk.crac;
  * <p>A {@code Context} implementor is encouraged to respect properties of the global {@code Context}.
  */
 public abstract class Context<R extends Resource> implements Resource {
+    private String[] newArgs = null;
 
     /** Creates a {@code Context}.
      */
@@ -55,4 +59,16 @@ public abstract class Context<R extends Resource> implements Resource {
      * @throws NullPointerException if {@code resource} is {@code null}
      */
     public abstract void register(R resource);
+
+    void setNewArgs(String[] args) {
+	this.newArgs = args;
+    }
+
+    public Optional<String[]> getNewArgs() {
+	if (newArgs != null) {
+		return Optional.of(Arrays.copyOfRange(newArgs, 0, newArgs.length));
+	} else {
+		return Optional.empty();
+	}
+    }
 }

@@ -149,11 +149,25 @@ public class Core {
             }
         }
 
-        RestoreException restoreException = null;
+	if (newArguments != null && newArguments.length() > 0) {
+	    globalContext.setNewArgs(newArguments.split(" "));
+	}
+        //RestoreException restoreException = null;
         try {
             globalContext.afterRestore(null);
         } catch (RestoreException re) {
             if (checkpointException == null) {
+		throw re;
+	    }
+            for (Throwable t : re.getSuppressed()) {
+                checkpointException.addSuppressed(t);
+            }
+	}
+
+        if (checkpointException != null) {
+            throw checkpointException;
+	}
+/*
                 restoreException = re;
             } else {
                 for (Throwable t : re.getSuppressed()) {
@@ -198,6 +212,7 @@ public class Core {
         } else if (restoreException != null) {
             throw restoreException;
         }
+*/
     }
 
     /**
