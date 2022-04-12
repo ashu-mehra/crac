@@ -226,6 +226,12 @@ public class VM {
 
     private static Map<String, String> savedProps;
 
+    public static void updateSavedProperties(Map<String, String> props) {
+        if (savedProps != null) {
+            savedProps.putAll(props);
+	}
+    }
+
     // Save a private copy of the system properties and remove
     // the system properties that are not intended for public access.
     //

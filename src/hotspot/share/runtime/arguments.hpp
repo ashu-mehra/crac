@@ -277,6 +277,9 @@ class Arguments : AllStatic {
   // Property list
   static SystemProperty* _system_properties;
 
+  // Property list when restoring from checkpoint
+  static SystemProperty* _system_properties_for_restore;
+
   // Quick accessor to System properties in the list:
   static SystemProperty *_sun_boot_library_path;
   static SystemProperty *_java_library_path;
@@ -376,9 +379,6 @@ class Arguments : AllStatic {
   static exit_hook_t      _exit_hook;
   static vfprintf_hook_t  _vfprintf_hook;
 
-  // System properties
-  static bool add_property(const char* prop, PropertyWriteable writeable=WriteableProperty,
-                           PropertyInternal internal=ExternalProperty);
 
   // Used for module system related properties: converted from command-line flags.
   // Basic properties are writeable as they operate as "last one wins" and will get overwritten.
@@ -468,6 +468,12 @@ class Arguments : AllStatic {
                                          char** base_archive_path,
                                          char** top_archive_path) NOT_CDS_RETURN;
 
+  // restore feature
+  static bool add_property_for_restore(const char* prop,
+                                       PropertyWriteable writeable=WriteableProperty,
+                                       PropertyInternal internal=ExternalProperty);
+  static bool is_restore_option_set(const JavaVMInitArgs* args);
+
  public:
   // Parses the arguments, first phase
   static jint parse(const JavaVMInitArgs* args);
@@ -520,6 +526,10 @@ class Arguments : AllStatic {
   // -Dkey=value flags
   static SystemProperty*  system_properties()   { return _system_properties; }
   static const char*    get_property(const char* key);
+
+  // System properties
+  static bool add_property(const char* prop, bool is_restoring=false, PropertyWriteable writeable=WriteableProperty,
+                           PropertyInternal internal=ExternalProperty);
 
   // -Djava.vendor.url.bug
   static const char* java_vendor_url_bug()  { return _java_vendor_url_bug; }
@@ -623,6 +633,9 @@ class Arguments : AllStatic {
   // preview features
   static void set_enable_preview() { _enable_preview = true; }
   static bool enable_preview() { return _enable_preview; }
+
+  // restore feature
+  static SystemProperty* system_properties_for_restore() { return _system_properties_for_restore; }
 
   // Utility: copies src into buf, replacing "%%" with "%" and "%p" with pid.
   static bool copy_expand_pid(const char* src, size_t srclen, char* buf, size_t buflen);

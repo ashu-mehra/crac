@@ -73,6 +73,7 @@ char** Arguments::_jvm_args_array               = NULL;
 int    Arguments::_num_jvm_args                 = 0;
 char*  Arguments::_java_command                 = NULL;
 SystemProperty* Arguments::_system_properties   = NULL;
+SystemProperty* Arguments::_system_properties_for_restore = NULL;
 const char*  Arguments::_gc_log_filename        = NULL;
 size_t Arguments::_conservative_max_heap_alignment = 0;
 Arguments::Mode Arguments::_mode                = _mixed;
@@ -1307,7 +1308,39 @@ const char* Arguments::get_property(const char* key) {
   return PropertyList_get_value(system_properties(), key);
 }
 
-bool Arguments::add_property(const char* prop, PropertyWriteable writeable, PropertyInternal internal) {
+#if 1
+bool Arguments::add_property_for_restore(const char* prop, PropertyWriteable writeable, PropertyInternal internal) {
+  const char* eq = strchr(prop, '=');
+  const char* key;
+  const char* value = "";
+
+  if (eq == NULL) {
+    // property doesn't have a value, thus use passed string
+    key = prop;
+  } else {
+    // property have a value, thus extract it and save to the
+    // allocated string
+    size_t key_len = eq - prop;
+    char* tmp_key = AllocateHeap(key_len + 1, mtArguments);
+
+    jio_snprintf(tmp_key, key_len + 1, "%s", prop);
+    key = tmp_key;
+
+    value = &prop[key_len + 1];
+  }
+  PropertyList_add(&_system_properties_for_restore, key, value, writeable == WriteableProperty, internal == InternalProperty);
+
+  if (key != prop) {
+    // SystemProperty copy passed value, thus free previously allocated
+    // memory
+    FreeHeap((void *)key);
+  }
+
+  return true;
+}
+#endif
+
+bool Arguments::add_property(const char* prop, bool is_restoring, PropertyWriteable writeable, PropertyInternal internal) {
   const char* eq = strchr(prop, '=');
   const char* key;
   const char* value = "";
@@ -1340,7 +1373,6 @@ bool Arguments::add_property(const char* prop, PropertyWriteable writeable, Prop
     log_info(cds)("full module graph: disabled due to incompatible property: %s=%s", key, value);
   }
 #endif
-
   if (strcmp(key, "java.compiler") == 0) {
     process_java_compiler_argument(value);
     // Record value in Arguments, but let it get passed to Java.
@@ -1353,12 +1385,14 @@ bool Arguments::add_property(const char* prop, PropertyWriteable writeable, Prop
     PropertyList_unique_add(&_system_properties, key, value, AppendProperty,
                             WriteableProperty, ExternalProperty);
   } else {
+    bool add_property_for_restore = true;
     if (strcmp(key, "sun.java.command") == 0) {
       char *old_java_command = _java_command;
       _java_command = os::strdup_check_oom(value, mtArguments);
       if (old_java_command != NULL) {
         os::free(old_java_command);
       }
+      add_property_for_restore = false;
     } else if (strcmp(key, "java.vendor.url.bug") == 0) {
       // If this property is set on the command line then its value will be
       // displayed in VM error logs as the URL at which to submit such logs.
@@ -1372,10 +1406,18 @@ bool Arguments::add_property(const char* prop, PropertyWriteable writeable, Prop
       if (old_java_vendor_url_bug != NULL) {
         os::free((void *)old_java_vendor_url_bug);
       }
+      add_property_for_restore = false;
+    } else if (!strcmp(key, "java.class.path") ||
+               !strcmp(key, "sun.java.launcher")) {
+      add_property_for_restore = false;
     }
 
-    // Create new property and add at the end of the list
-    PropertyList_unique_add(&_system_properties, key, value, AddProperty, writeable, internal);
+    if (add_property_for_restore) {
+      PropertyList_unique_add(&_system_properties_for_restore, key, value, AddProperty, writeable, internal);
+    } else {
+      // Create new property and add at the end of the list
+      PropertyList_unique_add(&_system_properties, key, value, AddProperty, writeable, internal);
+    }
   }
 
   if (key != prop) {
@@ -2078,7 +2120,7 @@ bool Arguments::create_module_property(const char* prop_name, const char* prop_v
   // that multiple occurrences of the associated flag just causes the existing property value to be
   // replaced ("last option wins"). Otherwise we would need to keep track of the flags and only convert
   // to a property after we have finished flag processing.
-  bool added = add_property(property, WriteableProperty, internal);
+  bool added = add_property(property, false, WriteableProperty, internal);
   FreeHeap(property);
   return added;
 }
@@ -2099,7 +2141,7 @@ bool Arguments::create_numbered_module_property(const char* prop_base_name, cons
       jio_fprintf(defaultStream::error_stream(), "Failed to create property %s.%d=%s\n", prop_base_name, count, prop_value);
       return false;
     }
-    bool added = add_property(property, UnwriteableProperty, InternalProperty);
+    bool added = add_property(property, false, UnwriteableProperty, InternalProperty);
     FreeHeap(property);
     return added;
   }
@@ -2306,9 +2348,22 @@ jint Arguments::parse_xss(const JavaVMOption* option, const char* tail, intx* ou
   return JNI_OK;
 }
 
+bool Arguments::is_restore_option_set(const JavaVMInitArgs* args) {
+  const char* tail;
+  // iterate over arguments
+  for (int index = 0; index < args->nOptions; index++) {
+    const JavaVMOption* option = args->options + index;
+    if (match_option(option, "-XX:CRaCRestoreFrom", &tail)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 jint Arguments::parse_each_vm_init_arg(const JavaVMInitArgs* args, bool* patch_mod_javabase, JVMFlagOrigin origin) {
   // For match_option to return remaining or value part of option string
   const char* tail;
+  bool restore_argument_parsed = false;
 
   // iterate over arguments
   for (int index = 0; index < args->nOptions; index++) {
@@ -2649,9 +2704,11 @@ jint Arguments::parse_each_vm_init_arg(const JavaVMInitArgs* args, bool* patch_m
         needs_module_property_warning = true;
         continue;
       }
-      if (!add_property(tail)) {
+      bool is_restoring = (restore_argument_parsed || is_restore_option_set(args));
+      if (!add_property(tail, is_restoring)) {
         return JNI_ENOMEM;
       }
+
       // Out of the box management support
       if (match_option(option, "-Dcom.sun.management", &tail)) {
 #if INCLUDE_MANAGEMENT
@@ -2934,6 +2991,9 @@ jint Arguments::parse_each_vm_init_arg(const JavaVMInitArgs* args, bool* patch_m
       // already been handled
       if ((strncmp(tail, "Flags=", strlen("Flags=")) != 0) &&
           (strncmp(tail, "VMOptionsFile=", strlen("VMOptionsFile=")) != 0)) {
+        if (!strncmp(tail, "CRaCRestoreFrom", strlen("CRaCRestoreFrom"))) {
+          restore_argument_parsed = true;
+        }
         if (!process_argument(tail, args->ignoreUnrecognized, origin)) {
           return JNI_EINVAL;
         }
